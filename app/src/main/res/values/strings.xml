@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Light Intensity</string>
+    <string name="toggle_flashlight">Toggle Flashlight</string>
+    <string name="light_intensity">Light Intensity:</string>
+</resources>
