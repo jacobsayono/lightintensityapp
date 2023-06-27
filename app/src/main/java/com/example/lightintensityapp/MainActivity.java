@@ -25,6 +25,17 @@ import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.ToggleButton;
 
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Color;
+import android.graphics.Rect;
+import android.graphics.YuvImage;
+import java.io.ByteArrayOutputStream;
+import android.graphics.ImageFormat;
+import android.media.Image;
+import android.media.ImageReader;
+import android.hardware.camera2.CaptureRequest.Builder;
+
 import com.github.mikephil.charting.charts.LineChart;
 import com.github.mikephil.charting.components.XAxis;
 import com.github.mikephil.charting.data.Entry;
@@ -32,6 +43,8 @@ import com.github.mikephil.charting.data.LineData;
 import com.github.mikephil.charting.data.LineDataSet;
 import com.github.mikephil.charting.formatter.ValueFormatter;
 
+import java.nio.ByteBuffer;
+import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Locale;
@@ -54,6 +67,11 @@ public class MainActivity extends AppCompatActivity {
     private LineDataSet lightIntensityDataSet;
     private ArrayList<Entry> lightIntensityEntries;
     private long startTime;
+
+    private ImageReader imageReader;
+
+    private CameraCaptureSession mCaptureSession;
+    private CaptureRequest.Builder captureRequestBuilder;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -149,6 +167,7 @@ public class MainActivity extends AppCompatActivity {
             // Check if the camera has a flash unit that can be used as a torch.
             Boolean isTorchAvailable = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE);
             if (isTorchAvailable != null && isTorchAvailable) {
+                setupImageReader();
                 cameraManager.openCamera(cameraId, new CameraDevice.StateCallback() {
                     @Override
                     public void onOpened(@NonNull CameraDevice camera) {
@@ -175,11 +194,10 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-
-
     private void createCaptureSession() {
         try {
-            cameraDevice.createCaptureSession(Collections.singletonList(new Surface(textureView.getSurfaceTexture())),
+            cameraDevice.createCaptureSession(
+                    Arrays.asList(new Surface(textureView.getSurfaceTexture()), imageReader.getSurface()),
                     new CameraCaptureSession.StateCallback() {
                         @Override
                         public void onConfigured(@NonNull CameraCaptureSession session) {
@@ -198,54 +216,126 @@ public class MainActivity extends AppCompatActivity {
 
     private void startCapture() {
         try {
-            CaptureRequest.Builder requestBuilder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
-            requestBuilder.addTarget(new Surface(textureView.getSurfaceTexture()));
+            captureRequestBuilder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
+            captureRequestBuilder.addTarget(new Surface(textureView.getSurfaceTexture()));
+            captureRequestBuilder.addTarget(imageReader.getSurface());
 
-            // Get the state of the toggle button
-            boolean isFlashlightOn = toggleButton.isChecked();
+            // Disable auto exposure
+            captureRequestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF);
 
             // Set the flash mode based on the state of the toggle button
+            boolean isFlashlightOn = toggleButton.isChecked();
             if (isFlashlightOn) {
-                requestBuilder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH);
+                captureRequestBuilder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH);
             } else {
-                requestBuilder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF);
+                captureRequestBuilder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF);
             }
 
-            captureSession.setRepeatingRequest(requestBuilder.build(), new CameraCaptureSession.CaptureCallback() {
+            captureSingleImage();
+        } catch (CameraAccessException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void captureSingleImage() {
+        try {
+            captureSession.capture(captureRequestBuilder.build(), new CameraCaptureSession.CaptureCallback() {
                 @Override
                 public void onCaptureCompleted(@NonNull CameraCaptureSession session, @NonNull CaptureRequest request, @NonNull TotalCaptureResult result) {
-                    int sensorSensitivity = result.get(CaptureResult.SENSOR_SENSITIVITY);
-                    int lightIntensity = 5000 - sensorSensitivity;
-                    runOnUiThread(() -> {
-                        lightIntensityTextView.setText("Light Intensity: " + lightIntensity);
-
-                        // Add the new light intensity data point to the chart
-                        long elapsedTimeInMilliseconds = System.currentTimeMillis() - startTime;
-                        lightIntensityEntries.add(new Entry(elapsedTimeInMilliseconds, lightIntensity));
-
-                        // Set the minimum and maximum values of the y-axis explicitly
-                        lightIntensityChart.getAxisLeft().setAxisMinimum(0f);
-                        lightIntensityChart.getAxisLeft().setAxisMaximum(5000f);
-
-                        // Remove data points that are off the left edge of the chart
-                        while (lightIntensityEntries.get(0).getX() < lightIntensityEntries.get(lightIntensityEntries.size() - 1).getX() - MAX_DATA_POINTS) {
-                            lightIntensityEntries.remove(0);
-                        }
-
-                        // Set the color of the line to black
-                        lightIntensityDataSet.setColor(Color.BLACK);
-
-                        // Notify the chart that the data has changed
-                        lightIntensityDataSet.notifyDataSetChanged();
-                        lightIntensityChart.getData().notifyDataChanged();
-                        lightIntensityChart.notifyDataSetChanged();
-                        lightIntensityChart.invalidate();
-                    });
+                    super.onCaptureCompleted(session, request, result);
+                    // Capture the next image after processing the current one
+                    captureSingleImage();
                 }
             }, null);
         } catch (CameraAccessException e) {
             e.printStackTrace();
         }
+    }
+
+
+    private void setupImageReader() {
+        // Create an ImageReader with the desired format and size
+        int imageFormat = ImageFormat.YUV_420_888;
+        int imageWidth = textureView.getWidth();
+        int imageHeight = textureView.getHeight();
+        int maxImages = 2; // Allow for double buffering
+        imageReader = ImageReader.newInstance(imageWidth, imageHeight, imageFormat, maxImages);
+
+        // Set the OnImageAvailableListener to receive image capture results
+        imageReader.setOnImageAvailableListener(reader -> {
+            // Get the latest captured image
+            Image image = reader.acquireLatestImage();
+            if (image != null) {
+                // Process the captured image
+                int lightIntensity = calculateLightIntensity(image);
+
+                // Close the image to release resources
+                image.close();
+
+                // Update the UI with the light intensity value
+                runOnUiThread(() -> {
+                    lightIntensityTextView.setText("Light Intensity: " + lightIntensity);
+
+                    // Add the new light intensity data point to the chart
+                    long elapsedTimeInMilliseconds = System.currentTimeMillis() - startTime;
+                    lightIntensityEntries.add(new Entry(elapsedTimeInMilliseconds, lightIntensity));
+
+                    // Set the minimum and maximum values of the y-axis explicitly
+                    lightIntensityChart.getAxisLeft().setAxisMinimum(0f);
+                    lightIntensityChart.getAxisLeft().setAxisMaximum(5000f);
+
+                    // Remove data points that are off the left edge of the chart
+                    while (lightIntensityEntries.get(0).getX() < lightIntensityEntries.get(lightIntensityEntries.size() - 1).getX() - MAX_DATA_POINTS) {
+                        lightIntensityEntries.remove(0);
+                    }
+
+                    // Set the color of the line to black
+                    lightIntensityDataSet.setColor(Color.BLACK);
+
+                    // Notify the chart that the data has changed
+                    lightIntensityDataSet.notifyDataSetChanged();
+                    lightIntensityChart.getData().notifyDataChanged();
+                    lightIntensityChart.notifyDataSetChanged();
+                    lightIntensityChart.invalidate();
+                });
+            }
+        }, null);
+    }
+
+    private int calculateLightIntensity(Image image) {
+        // Convert the YUV image to RGB
+        YuvImage yuvImage = new YuvImage(imageToByteArray(image), ImageFormat.NV21, image.getWidth(), image.getHeight(), null);
+        ByteArrayOutputStream stream = new ByteArrayOutputStream();
+        yuvImage.compressToJpeg(new Rect(0, 0, image.getWidth(), image.getHeight()), 100, stream);
+        byte[] rgbData = stream.toByteArray();
+
+        // Decode the RGB data into a Bitmap
+        Bitmap bitmap = BitmapFactory.decodeByteArray(rgbData, 0, rgbData.length);
+
+        // Calculate the average brightness of the Bitmap
+        int sum = 0;
+        int count = 0;
+        for (int y = 0; y < bitmap.getHeight(); y++) {
+            for (int x = 0; x < bitmap.getWidth(); x++) {
+                int pixel = bitmap.getPixel(x, y);
+                int brightness = (Color.red(pixel) + Color.green(pixel) + Color.blue(pixel)) / 3;
+                sum += brightness;
+                count++;
+            }
+        }
+        int averageBrightness = sum / count;
+
+        // Scale the average brightness to the range 0-5000
+        int lightIntensity = (int) (averageBrightness / 255.0 * 5000.0);
+        return lightIntensity;
+    }
+
+    private byte[] imageToByteArray(Image image) {
+        Image.Plane[] planes = image.getPlanes();
+        ByteBuffer buffer = planes[0].getBuffer();
+        byte[] data = new byte[buffer.capacity()];
+        buffer.get(data);
+        return data;
     }
 
 
