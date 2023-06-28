@@ -256,8 +256,8 @@ public class MainActivity extends AppCompatActivity {
     private void setupImageReader() {
         // Create an ImageReader with the desired format and size
         int imageFormat = ImageFormat.YUV_420_888;
-        int imageWidth = textureView.getWidth();
-        int imageHeight = textureView.getHeight();
+        int imageWidth = textureView.getWidth() / 10;
+        int imageHeight = textureView.getHeight() / 10;
         int maxImages = 2; // Allow for double buffering
         imageReader = ImageReader.newInstance(imageWidth, imageHeight, imageFormat, maxImages);
 
@@ -303,32 +303,35 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private int calculateLightIntensity(Image image) {
-        // Convert the YUV image to RGB
-        YuvImage yuvImage = new YuvImage(imageToByteArray(image), ImageFormat.NV21, image.getWidth(), image.getHeight(), null);
-        ByteArrayOutputStream stream = new ByteArrayOutputStream();
-        yuvImage.compressToJpeg(new Rect(0, 0, image.getWidth(), image.getHeight()), 100, stream);
-        byte[] rgbData = stream.toByteArray();
+        Image.Plane[] planes = image.getPlanes();
+        ByteBuffer buffer = planes[0].getBuffer();
+        int rowStride = planes[0].getRowStride();
+        int pixelStride = planes[0].getPixelStride();
+        int width = image.getWidth();
+        int height = image.getHeight();
 
-        // Decode the RGB data into a Bitmap
-        Bitmap bitmap = BitmapFactory.decodeByteArray(rgbData, 0, rgbData.length);
-
-        // Calculate the average brightness of the Bitmap
         int sum = 0;
         int count = 0;
-        for (int y = 0; y < bitmap.getHeight(); y++) {
-            for (int x = 0; x < bitmap.getWidth(); x++) {
-                int pixel = bitmap.getPixel(x, y);
-                int brightness = (Color.red(pixel) + Color.green(pixel) + Color.blue(pixel)) / 3;
-                sum += brightness;
+
+        // Iterate through the Y plane and calculate the sum of luminance values
+        for (int row = 0; row < height; row++) {
+            int rowOffset = row * rowStride;
+            for (int col = 0; col < width; col++) {
+                int offset = rowOffset + col * pixelStride;
+                int luminance = buffer.get(offset) & 0xFF;
+                sum += luminance;
                 count++;
             }
         }
-        int averageBrightness = sum / count;
 
-        // Scale the average brightness to the range 0-5000
-        int lightIntensity = (int) (averageBrightness / 255.0 * 5000.0);
+        // Calculate the average luminance
+        int averageLuminance = sum / count;
+
+        // Scale the average luminance to the desired range
+        int lightIntensity = (int) (averageLuminance / 255.0 * 5000.0);
         return lightIntensity;
     }
+
 
     private byte[] imageToByteArray(Image image) {
         Image.Plane[] planes = image.getPlanes();
