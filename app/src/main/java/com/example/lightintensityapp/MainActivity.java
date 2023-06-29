@@ -76,6 +76,8 @@ public class MainActivity extends AppCompatActivity {
     // Declare the previous frame's buffer variable as a class member variable
     private ByteBuffer previousFrameBuffer = null;
 
+    private int blinkingPixelThreshold = 100; // Adjust this threshold as needed (0-255)
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -316,33 +318,39 @@ public class MainActivity extends AppCompatActivity {
         int sum = 0;
         int count = 0;
 
-        // Retrieve the previous frame's luminance values from a variable outside this method
-        // For the first frame, initialize it to null
         ByteBuffer previousBuffer = previousFrameBuffer;
 
-        // Iterate through the Y plane and calculate the sum of luminance values
+        if (previousFrameBuffer == null) {
+            int bufferSize = buffer.capacity();
+            previousFrameBuffer = ByteBuffer.allocate(bufferSize);
+        }
+
         for (int row = 0; row < height; row++) {
             int rowOffset = row * rowStride;
             for (int col = 0; col < width; col++) {
                 int offset = rowOffset + col * pixelStride;
                 int luminance = buffer.get(offset) & 0xFF;
 
-                // Compare the current luminance value with the previous frame's luminance value
-                // If there is a change in brightness, consider this pixel
-                if (previousBuffer != null && Math.abs(luminance - (previousBuffer.get(offset) & 0xFF)) > 0) {
-                    sum += luminance;
-                    count++;
+                if (previousBuffer != null) {
+                    int previousLuminance = previousBuffer.get(offset) & 0xFF;
+
+                    // Calculate the absolute difference in luminance between the current and previous frames
+                    int luminanceDifference = Math.abs(luminance - previousLuminance);
+
+                    // Check if the luminance difference exceeds the blinking pixel threshold
+                    if (luminanceDifference > blinkingPixelThreshold) {
+                        sum += luminance;
+                        count++;
+                    }
                 }
             }
         }
 
-        // Update the previous frame's buffer with the current frame's buffer
-        previousFrameBuffer = buffer;
+        previousFrameBuffer.rewind();
+        buffer.rewind();
+        previousFrameBuffer.put(buffer);
 
-        // Calculate the average luminance
         int averageLuminance = count > 0 ? sum / count : 0;
-
-        // Scale the average luminance to the desired range
         int lightIntensity = (int) (averageLuminance / 255.0 * 5000.0);
         return lightIntensity;
     }
