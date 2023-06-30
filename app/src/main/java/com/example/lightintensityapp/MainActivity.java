@@ -76,7 +76,47 @@ public class MainActivity extends AppCompatActivity {
     // Declare the previous frame's buffer variable as a class member variable
     private ByteBuffer previousFrameBuffer = null;
 
-    private int blinkingPixelThreshold = 100; // Adjust this threshold as needed (0-255)
+    private int[][] blinkCounters;  // This should be declared at the top of your class
+
+
+
+    /*
+    This threshold is used to determine whether the change in brightness of a pixel is significant enough to be considered a "blinking" pixel. If the difference between the current brightness and the previous brightness of a pixel exceeds this threshold, then the pixel is considered to be "blinking".
+
+    Increasing this value would mean that only larger changes in brightness would be considered "blinking". This could help reduce the influence of minor brightness fluctuations, such as those caused by noise in the camera sensor or small variations in lighting. However, if this value is too high, it could miss genuine brightness changes caused by your rotating mechanism.
+
+    Decreasing this value would mean that smaller changes in brightness would be considered "blinking". This could make the algorithm more sensitive to brightness changes caused by your rotating mechanism. However, if this value is too low, it could cause the algorithm to detect a lot of false positives due to minor brightness fluctuations.
+     */
+    private int blinkingPixelThreshold = 50; // Adjust this threshold as needed (0-255)
+
+
+
+    /*
+    This threshold is used to determine whether the rate of brightness change of a pixel is fast enough to be considered a "blinking" pixel. If the rate of change of brightness (calculated as the difference in brightness divided by the time difference) exceeds this threshold, then the pixel is considered to be "blinking".
+
+    Increasing this value would mean that only faster changes in brightness would be considered "blinking". This could help reduce the influence of slow changes in brightness, such as those caused by changes in ambient lighting. However, if this value is too high, it could miss genuine brightness changes caused by your rotating mechanism that happen at a slower rate.
+
+    Decreasing this value would mean that slower changes in brightness would be considered "blinking". This could make the algorithm more sensitive to brightness changes caused by your rotating mechanism, even if they happen at a slower rate. However, if this value is too low, it could cause the algorithm to detect a lot of false positives due to slow changes in brightness.
+     */
+    // Set a time-based threshold for ignoring pixels based on brightness change rate
+    private float brightnessChangeRateThreshold = 1f; // Adjust this threshold as needed, for example 0.2 = 20% change per millisecond
+
+
+
+    private int minBlinkCountThreshold = 3; // adjust this value based on your mechanism
+
+
+
+    /*
+    This threshold determines the maximum amount of time that a brightness change can take to still be considered a "blinking" pixel. If the time difference between the current frame and the frame in which the brightness change started is less than this threshold, then the pixel is considered to be "blinking".
+
+    Increasing this value would mean that longer-lasting changes in brightness would still be considered "blinking". This could make the algorithm more tolerant of brightness changes that happen over a longer time period. However, if this value is too high, it could cause the algorithm to detect a lot of false positives due to longer-lasting brightness changes that are not caused by your rotating mechanism.
+
+    Decreasing this value would mean that only quick, short-lasting changes in brightness would be considered "blinking". This could help reduce the influence of brightness changes that happen over a longer time period. However, if this value is too low, it could miss genuine brightness changes caused by your rotating mechanism that happen over a longer time period.
+     */
+//    private long maxChangeDuration = 5000; // Change this as needed, in milliseconds
+
+    private long[][] previousFrameTime = null; // This needs to be initialized similarly to previousFrameBuffer
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -261,8 +301,8 @@ public class MainActivity extends AppCompatActivity {
     private void setupImageReader() {
         // Create an ImageReader with the desired format and size
         int imageFormat = ImageFormat.YUV_420_888;
-        int imageWidth = textureView.getWidth() / 10;
-        int imageHeight = textureView.getHeight() / 10;
+        int imageWidth = textureView.getWidth() / 4;  // Reduce image resolution by a factor of 2
+        int imageHeight = textureView.getHeight() / 4;
         int maxImages = 2; // Allow for double buffering
         imageReader = ImageReader.newInstance(imageWidth, imageHeight, imageFormat, maxImages);
 
@@ -318,11 +358,13 @@ public class MainActivity extends AppCompatActivity {
         int sum = 0;
         int count = 0;
 
-        ByteBuffer previousBuffer = previousFrameBuffer;
-
-        if (previousFrameBuffer == null) {
+        // If buffer sizes have changed, re-allocate
+        if (previousFrameBuffer == null || previousFrameBuffer.capacity() != buffer.capacity()) {
             int bufferSize = buffer.capacity();
             previousFrameBuffer = ByteBuffer.allocate(bufferSize);
+            previousFrameTime = new long[height][width];
+            blinkCounters = new int[height][width];  // Initialize blinkCounters here
+
         }
 
         for (int row = 0; row < height; row++) {
@@ -331,29 +373,45 @@ public class MainActivity extends AppCompatActivity {
                 int offset = rowOffset + col * pixelStride;
                 int luminance = buffer.get(offset) & 0xFF;
 
-                if (previousBuffer != null) {
-                    int previousLuminance = previousBuffer.get(offset) & 0xFF;
+                if (previousFrameBuffer != null) {
+                    int previousLuminance = previousFrameBuffer.get(offset) & 0xFF;
+                    long currentTime = System.currentTimeMillis();
+                    long previousTime = previousFrameTime[row][col];
+                    long elapsedTimeInMilliseconds = currentTime - previousTime;
 
-                    // Calculate the absolute difference in luminance between the current and previous frames
-                    int luminanceDifference = Math.abs(luminance - previousLuminance);
-
-                    // Check if the luminance difference exceeds the blinking pixel threshold
-                    if (luminanceDifference > blinkingPixelThreshold) {
-                        sum += luminance;
-                        count++;
+                    // If elapsed time is zero, skip this pixel to avoid division by zero
+                    if (elapsedTimeInMilliseconds == 0) {
+                        continue;
                     }
+
+                    int luminanceDifference = Math.abs(luminance - previousLuminance);
+                    float brightnessChangeRate = 1000.0f * luminanceDifference / (float) elapsedTimeInMilliseconds;
+
+                    // Modify the condition for incrementing the sum and count variables
+                    if (luminanceDifference > blinkingPixelThreshold && brightnessChangeRate > brightnessChangeRateThreshold) {
+                        blinkCounters[row][col]++;
+                        if (blinkCounters[row][col] >= minBlinkCountThreshold) {
+                            sum += luminance;
+                            count++;
+                        }
+                    } else {
+                        blinkCounters[row][col] = 0;
+                    }
+
+                    previousFrameTime[row][col] = currentTime;
                 }
             }
         }
 
-        previousFrameBuffer.rewind();
-        buffer.rewind();
+        previousFrameBuffer.clear();
         previousFrameBuffer.put(buffer);
 
         int averageLuminance = count > 0 ? sum / count : 0;
         int lightIntensity = (int) (averageLuminance / 255.0 * 5000.0);
         return lightIntensity;
     }
+
+
 
 
 
