@@ -19,6 +19,8 @@ import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.CaptureResult;
 import android.hardware.camera2.TotalCaptureResult;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.HandlerThread;
 import android.view.Surface;
 import android.view.TextureView;
 import android.widget.TextView;
@@ -35,6 +37,11 @@ import android.graphics.ImageFormat;
 import android.media.Image;
 import android.media.ImageReader;
 import android.hardware.camera2.CaptureRequest.Builder;
+
+import android.view.MotionEvent;
+import android.view.View;
+import android.graphics.Canvas;
+import android.graphics.Paint;
 
 import com.github.mikephil.charting.charts.LineChart;
 import com.github.mikephil.charting.components.XAxis;
@@ -69,9 +76,14 @@ public class MainActivity extends AppCompatActivity {
     private long startTime;
 
     private ImageReader imageReader;
-
-    private CameraCaptureSession mCaptureSession;
     private CaptureRequest.Builder captureRequestBuilder;
+
+
+
+    private static final int BOX_SIZE = 50; // The size of the bounding box
+    private int boxLeft = 0;
+    private int boxTop = 0;
+    private Paint boxPaint;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -111,11 +123,55 @@ public class MainActivity extends AppCompatActivity {
         lightIntensityChart.getXAxis().setPosition(XAxis.XAxisPosition.BOTTOM);
 
         textureView = findViewById(R.id.textureView);
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_REQUEST_CODE);
+        } else {
+            setupCamera();
+            boxPaint = new Paint();
+            boxPaint.setColor(Color.RED);
+            boxPaint.setStyle(Paint.Style.STROKE);
+            boxPaint.setStrokeWidth(5.0f);
+        }
+
+        toggleButton = findViewById(R.id.toggleButton);
+        toggleButton.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            if (isChecked) {
+                try {
+                    captureRequestBuilder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH);
+                    captureSession.setRepeatingRequest(captureRequestBuilder.build(), null, backgroundHandler);
+                } catch (CameraAccessException e) {
+                    e.printStackTrace();
+                }
+            } else {
+                try {
+                    captureRequestBuilder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF);
+                    captureSession.setRepeatingRequest(captureRequestBuilder.build(), null, backgroundHandler);
+                } catch (CameraAccessException e) {
+                    e.printStackTrace();
+                }
+            }
+        });
+
+        lightIntensityTextView = findViewById(R.id.lightIntensityTextView);
+
+        if (lightIntensityTextView != null) {
+            // Handle touch events to move the bounding box
+            textureView.setOnTouchListener((v, event) -> {
+                boxLeft = (int) event.getX() - BOX_SIZE / 2;
+                boxTop = (int) event.getY() - BOX_SIZE / 2;
+                textureView.invalidate();
+                return false;
+            });
+        }
+
+        // Set up the surface texture listener after the camera setup
         textureView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
             @Override
             public void onSurfaceTextureAvailable(@NonNull SurfaceTexture surface, int width, int height) {
-                setupCamera();
-                textureView.setSurfaceTextureListener(this);
+                boxLeft = textureView.getWidth() / 2 - BOX_SIZE / 2;
+                boxTop = textureView.getHeight() / 2 - BOX_SIZE / 2;
+                setupCamera(); // Move the camera setup here
             }
 
             @Override
@@ -130,32 +186,51 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onSurfaceTextureUpdated(@NonNull SurfaceTexture surface) {
+                Canvas canvas = textureView.lockCanvas();
+                if (canvas != null) {
+                    canvas.drawColor(0, android.graphics.PorterDuff.Mode.CLEAR);
+                    // Draw bounding box on the updated surface
+                    canvas.drawRect(boxLeft, boxTop, boxLeft + BOX_SIZE, boxTop + BOX_SIZE, boxPaint);
+                    textureView.unlockCanvasAndPost(canvas);
+                }
             }
         });
-
-        toggleButton = findViewById(R.id.toggleButton);
-        toggleButton.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            startCapture();
-        });
+    }
 
 
-        lightIntensityTextView = findViewById(R.id.lightIntensityTextView);
+    private HandlerThread backgroundThread;
+    private Handler backgroundHandler;
 
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_REQUEST_CODE);
-        } else {
+    private void startBackgroundThread() {
+        backgroundThread = new HandlerThread("Camera Background");
+        backgroundThread.start();
+        backgroundHandler = new Handler(backgroundThread.getLooper());
+    }
+
+    private void stopBackgroundThread() {
+        backgroundThread.quitSafely();
+        try {
+            backgroundThread.join();
+            backgroundThread = null;
+            backgroundHandler = null;
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        startBackgroundThread();
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
             setupCamera();
         }
     }
 
     @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == CAMERA_PERMISSION_REQUEST_CODE) {
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                setupCamera();
-            }
-        }
+    protected void onPause() {
+        stopBackgroundThread();
+        super.onPause();
     }
 
     private void setupCamera() {
@@ -184,7 +259,7 @@ public class MainActivity extends AppCompatActivity {
                     public void onError(@NonNull CameraDevice camera, int error) {
                         camera.close();
                     }
-                }, null);
+                }, backgroundHandler);
             } else {
                 Toast.makeText(this, "Torch not available on this device", Toast.LENGTH_SHORT).show();
                 finish();
@@ -192,6 +267,18 @@ public class MainActivity extends AppCompatActivity {
         } catch (CameraAccessException | SecurityException e) {
             e.printStackTrace();
         }
+
+        // box initial position setup
+        boxLeft = textureView.getWidth() / 2 - BOX_SIZE / 2;
+        boxTop = textureView.getHeight() / 2 - BOX_SIZE / 2;
+
+        // Setup touch listener
+        textureView.setOnTouchListener((v, event) -> {
+            boxLeft = (int) event.getX() - BOX_SIZE / 2;
+            boxTop = (int) event.getY() - BOX_SIZE / 2;
+            textureView.invalidate();
+            return false;
+        });
     }
 
     private void createCaptureSession() {
@@ -231,24 +318,29 @@ public class MainActivity extends AppCompatActivity {
                 captureRequestBuilder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF);
             }
 
-            captureSingleImage();
+            captureSession.setRepeatingRequest(captureRequestBuilder.build(), null, backgroundHandler);
         } catch (CameraAccessException e) {
             e.printStackTrace();
         }
     }
 
+    private int captureCount = 0;
+    private static final int MAX_CAPTURE_COUNT = 100;
+
     private void captureSingleImage() {
-        try {
-            captureSession.capture(captureRequestBuilder.build(), new CameraCaptureSession.CaptureCallback() {
-                @Override
-                public void onCaptureCompleted(@NonNull CameraCaptureSession session, @NonNull CaptureRequest request, @NonNull TotalCaptureResult result) {
-                    super.onCaptureCompleted(session, request, result);
-                    // Capture the next image after processing the current one
-                    captureSingleImage();
-                }
-            }, null);
-        } catch (CameraAccessException e) {
-            e.printStackTrace();
+        if (captureCount >= MAX_CAPTURE_COUNT) {
+            try {
+                captureSession.capture(captureRequestBuilder.build(), new CameraCaptureSession.CaptureCallback() {
+                    @Override
+                    public void onCaptureCompleted(@NonNull CameraCaptureSession session, @NonNull CaptureRequest request, @NonNull TotalCaptureResult result) {
+                        super.onCaptureCompleted(session, request, result);
+                        // Capture the next image after processing the current one
+                        captureSingleImage();
+                    }
+                }, null);
+            } catch (CameraAccessException e) {
+                e.printStackTrace();
+            }
         }
     }
 
@@ -256,8 +348,8 @@ public class MainActivity extends AppCompatActivity {
     private void setupImageReader() {
         // Create an ImageReader with the desired format and size
         int imageFormat = ImageFormat.YUV_420_888;
-        int imageWidth = textureView.getWidth() / 10;
-        int imageHeight = textureView.getHeight() / 10;
+        int imageWidth = textureView.getWidth();
+        int imageHeight = textureView.getHeight();
         int maxImages = 2; // Allow for double buffering
         imageReader = ImageReader.newInstance(imageWidth, imageHeight, imageFormat, maxImages);
 
@@ -305,18 +397,24 @@ public class MainActivity extends AppCompatActivity {
     private int calculateLightIntensity(Image image) {
         Image.Plane[] planes = image.getPlanes();
         ByteBuffer buffer = planes[0].getBuffer();
+        byte[] data = new byte[buffer.capacity()];
+        buffer.get(data);
         int rowStride = planes[0].getRowStride();
         int pixelStride = planes[0].getPixelStride();
-        int width = image.getWidth();
-        int height = image.getHeight();
 
         int sum = 0;
         int count = 0;
 
-        // Iterate through the Y plane and calculate the sum of luminance values
-        for (int row = 0; row < height; row++) {
+        // Calculate the pixel position of the bounding box
+        int boxLeftPixel = boxLeft * image.getWidth() / textureView.getWidth();
+        int boxTopPixel = boxTop * image.getHeight() / textureView.getHeight();
+        int boxRightPixel = boxLeftPixel + BOX_SIZE * image.getWidth() / textureView.getWidth();
+        int boxBottomPixel = boxTopPixel + BOX_SIZE * image.getHeight() / textureView.getHeight();
+
+        // Iterate through the Y plane within the bounding box and calculate the sum of luminance values
+        for (int row = boxTopPixel; row < boxBottomPixel; row++) {
             int rowOffset = row * rowStride;
-            for (int col = 0; col < width; col++) {
+            for (int col = boxLeftPixel; col < boxRightPixel; col++) {
                 int offset = rowOffset + col * pixelStride;
                 int luminance = buffer.get(offset) & 0xFF;
                 sum += luminance;
@@ -325,7 +423,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         // Calculate the average luminance
-        int averageLuminance = sum / count;
+        int averageLuminance = count != 0 ? sum / count : 0;
 
         // Scale the average luminance to the desired range
         int lightIntensity = (int) (averageLuminance / 255.0 * 5000.0);
@@ -341,9 +439,23 @@ public class MainActivity extends AppCompatActivity {
         return data;
     }
 
+    private void stopCapture() {
+        try {
+            if (captureSession != null) {
+                captureSession.stopRepeating();
+                captureSession.abortCaptures();
+            }
+        } catch (CameraAccessException e) {
+            e.printStackTrace();
+        }
+    }
+
+
+
 
     @Override
     protected void onDestroy() {
+        stopCapture();
         super.onDestroy();
         if (captureSession != null) {
             captureSession.close();
