@@ -65,6 +65,8 @@ public class MainActivity extends AppCompatActivity {
 
     private ToggleButton toggleButton;
     private TextureView textureView;
+
+    private View boundingBox;
     private CameraManager cameraManager;
     private CameraDevice cameraDevice;
     private CameraCaptureSession captureSession;
@@ -158,19 +160,28 @@ public class MainActivity extends AppCompatActivity {
         if (lightIntensityTextView != null) {
             // Handle touch events to move the bounding box
             textureView.setOnTouchListener((v, event) -> {
-                boxLeft = (int) event.getX() - BOX_SIZE / 2;
-                boxTop = (int) event.getY() - BOX_SIZE / 2;
+                // Get the touch coordinates
+                float touchX = event.getX();
+                float touchY = event.getY();
+
+                // Call the method to update the bounding box position
+                updateBoundingBoxPosition(touchX, touchY);
+
+                // Invalidate the texture view to redraw the bounding box
                 textureView.invalidate();
+
+                // Return false to indicate that the touch event is not consumed
                 return false;
             });
         }
+
 
         // Set up the surface texture listener after the camera setup
         textureView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
             @Override
             public void onSurfaceTextureAvailable(@NonNull SurfaceTexture surface, int width, int height) {
-                boxLeft = textureView.getWidth() / 2 - BOX_SIZE / 2;
-                boxTop = textureView.getHeight() / 2 - BOX_SIZE / 2;
+                boxLeft = width / 2 - BOX_SIZE / 2;
+                boxTop = height / 2 - BOX_SIZE / 2;
                 setupCamera(); // Move the camera setup here
             }
 
@@ -195,7 +206,27 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         });
+
+        boundingBox = findViewById(R.id.boundingBox);
     }
+
+    private void updateBoundingBoxPosition(float x, float y) {
+        int boundingBoxWidth = BOX_SIZE;
+        int boundingBoxHeight = BOX_SIZE;
+        int textureViewWidth = textureView.getWidth();
+        int textureViewHeight = textureView.getHeight();
+
+        float boundingBoxX = Math.max(0, Math.min(x - boundingBoxWidth / 2, textureViewWidth - boundingBoxWidth));
+        float boundingBoxY = Math.max(0, Math.min(y - boundingBoxHeight / 2, textureViewHeight - boundingBoxHeight));
+
+        boundingBox.setX(boundingBoxX);
+        boundingBox.setY(boundingBoxY);
+
+        // Update the boxLeft and boxTop variables based on the new position and size
+        boxLeft = (int) boundingBoxX;
+        boxTop = (int) boundingBoxY;
+    }
+
 
 
     private HandlerThread backgroundThread;
@@ -267,18 +298,6 @@ public class MainActivity extends AppCompatActivity {
         } catch (CameraAccessException | SecurityException e) {
             e.printStackTrace();
         }
-
-        // box initial position setup
-        boxLeft = textureView.getWidth() / 2 - BOX_SIZE / 2;
-        boxTop = textureView.getHeight() / 2 - BOX_SIZE / 2;
-
-        // Setup touch listener
-        textureView.setOnTouchListener((v, event) -> {
-            boxLeft = (int) event.getX() - BOX_SIZE / 2;
-            boxTop = (int) event.getY() - BOX_SIZE / 2;
-            textureView.invalidate();
-            return false;
-        });
     }
 
     private void createCaptureSession() {
@@ -406,10 +425,11 @@ public class MainActivity extends AppCompatActivity {
         int count = 0;
 
         // Calculate the pixel position of the bounding box
-        int boxLeftPixel = boxLeft * image.getWidth() / textureView.getWidth();
-        int boxTopPixel = boxTop * image.getHeight() / textureView.getHeight();
-        int boxRightPixel = boxLeftPixel + BOX_SIZE * image.getWidth() / textureView.getWidth();
-        int boxBottomPixel = boxTopPixel + BOX_SIZE * image.getHeight() / textureView.getHeight();
+        int boxLeftPixel = boxTop * image.getWidth() / textureView.getHeight();
+        int boxTopPixel = (textureView.getWidth() - boxLeft - BOX_SIZE) * image.getHeight() / textureView.getWidth();
+        int boxRightPixel = boxLeftPixel + BOX_SIZE * image.getWidth() / textureView.getHeight();
+        int boxBottomPixel = boxTopPixel + BOX_SIZE * image.getHeight() / textureView.getWidth();
+
 
         // Iterate through the Y plane within the bounding box and calculate the sum of luminance values
         for (int row = boxTopPixel; row < boxBottomPixel; row++) {
