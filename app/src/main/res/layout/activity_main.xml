@@ -15,6 +15,16 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintVertical_bias="0.5" />
 
+    <View
+        android:id="@+id/boundingBox"
+        android:layout_width="50dp"
+        android:layout_height="50dp"
+        android:background="@drawable/bounding_box_background"
+        app:layout_constraintStart_toStartOf="@+id/textureView"
+        app:layout_constraintEnd_toEndOf="@+id/textureView"
+        app:layout_constraintTop_toTopOf="@+id/textureView"
+        app:layout_constraintBottom_toBottomOf="@+id/textureView" />
+
     <TextView
         android:id="@+id/lightIntensityTextView"
         android:layout_width="wrap_content"
